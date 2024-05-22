@@ -105,6 +105,7 @@ class Provider:
 
 
 def generate_providers(
+    existing_providers: List[Provider],
     num_providers: int,
     capacity_range: tuple,
     price_threshold: tuple,
@@ -126,10 +127,9 @@ def generate_providers(
     Returns:
     - A list of Provider objects with randomized attributes based on the input ranges.
     """
-    providers = []
     for i in range(num_providers):
         slots = []
-        provider_id = i
+        provider_id = len(existing_providers)
         num_slots = np.random.randint(*slots_range)
 
         for i in range(num_slots):
@@ -151,8 +151,8 @@ def generate_providers(
                 )
             )
 
-        providers.append(Provider(provider_id, slots))
-    return providers
+        existing_providers.append(Provider(provider_id, slots))
+    return existing_providers
 
 
 class MarketplaceBookkeeper:
@@ -254,7 +254,7 @@ collateral_range_providers = (0.1, 10.0)  # Collateral range in CODX tokens
 price_threshold_providers = (0.5, 2)  # Minimum acceptable price for providers, in CODX tokens
 slots_range = (1, 10)  # Number of slots
 until_range = (4, 5)
-
+existing_providers = []
 # Client parameters
 capacity_range_clients = (100, 1000)  # client capacity range in GB
 duration_range_clients = (30, 365)  # Contract duration range in days
@@ -269,6 +269,7 @@ delay_range = (1, 3)
 
 # Generate initial set of providers
 providers = generate_providers(
+    existing_providers,
     num_providers,
     capacity_range_providers,
     price_threshold_providers,
@@ -290,7 +291,7 @@ deals_per_provider = {provider.provider_id: 0 for provider in providers}  # Deal
 available_space_over_time = []
 unserviced_deals_list = []
 valid_slots = []
-
+used_slots = []
 # Calculate initial total capacity
 total_capacity = sum(slot.capacity for provider in providers for slot in provider.slots)
 available_space_over_time.append(total_capacity)
@@ -320,7 +321,7 @@ while time < total_time:
         )[0]
 
         # Select slot with the highest collateral available
-        valid_slots = [slot for provider in providers for slot in provider.slots if slot.decide_on_contract(client)]
+        valid_slots = [slot for provider in providers for slot in provider.slots if slot.decide_on_contract(client) if slot not in used_slots]
 
         # Check if there are any valid slots before calling max()
         if valid_slots:
@@ -347,6 +348,13 @@ while time < total_time:
                     client.duration,
                     client.collateral,
                 )
+                used_slots.append(max_collateral_slot)
+
+                # Update the count of deals serviced by each provider
+                if max_collateral_provider.provider_id in deals_per_provider:
+                    deals_per_provider[max_collateral_provider.provider_id] += 1
+                else:
+                    deals_per_provider[max_collateral_provider.provider_id] = 1
 
         else:
             unserviced_deals += 1  # Increment unserviced deals counter if no match is found
@@ -357,13 +365,10 @@ while time < total_time:
         total_collateral = sum(deal.collateral for deal in bookkeeper.deals)
         collateral_over_time.append(total_collateral)
 
-        # Update the count of deals serviced by each provider
-        for deal in bookkeeper.deals:
-            deals_per_provider[deal.provider.provider_id] += 1
-
     else:  # provider arrives
         time = time + t_provider
         new_provider = generate_providers(
+            providers[:],
             1,
             capacity_range_providers,
             price_threshold_providers,
@@ -371,7 +376,7 @@ while time < total_time:
             collateral_range_providers,
             slots_range,
             until_range,
-        )[0]
+        )[-1]
         providers.append(new_provider)
 
         total_capacity += sum(slot.capacity for slot in new_provider.slots)  # Increase total capacity
@@ -389,8 +394,14 @@ while time < total_time:
                         unserviced_client.duration,
                         unserviced_client.collateral,
                     )
-                    unserviced_deals_list.remove(unserviced_client)  # Remove serviced client from the unserviced list
-                    deals_per_provider[new_provider.provider_id] += 1  # Update deal count for the new provider
+                    unserviced_deals_list.remove(unserviced_client)  # Remove serviced client from the unserviced list                    
+
+                    # Check if the provider_id exists in the dictionary and update accordingly
+                    if new_provider.provider_id in deals_per_provider:
+                        deals_per_provider[new_provider.provider_id] += 1
+                    else:
+                        deals_per_provider[new_provider.provider_id] = 1
+
                     break  # Exit the inner loop as the client has been serviced
             else:
                 continue  # If the inner loop wasn't broken, continue with the next client
@@ -429,4 +440,16 @@ plt.title("Historical Available Space Over Time")
 plt.legend()
 plt.tight_layout()
 
+plt.show()
+
+# Plot the distribution of deals per provider
+plt.figure(figsize=(16, 9))
+providers_ids = list(deals_per_provider.keys())
+deals_counts = list(deals_per_provider.values())
+
+plt.bar(providers_ids, deals_counts, color='skyblue')
+plt.xlabel('Provider ID')
+plt.ylabel('Number of Deals Serviced')
+plt.title('Distribution of Deals per Provider')
+plt.xticks(providers_ids, rotation=45)  # Ensure provider IDs are readable
 plt.show()
