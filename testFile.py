@@ -251,27 +251,21 @@ num_providers = 100  # Number of storage providers in the marketplace
 capacity_range_providers = (100, 1000)  # Provider capacity range in GB
 duration_range_providers = (30, 365)  # Contract duration range in days
 collateral_range_providers = (0.1, 10.0)  # Collateral range in CODX tokens
-price_threshold_providers = (
-    0.5,
-    2,
-)  # Minimum acceptable price for providers, in CODX tokens
+price_threshold_providers = (0.5, 2)  # Minimum acceptable price for providers, in CODX tokens
 slots_range = (1, 10)  # Number of slots
-until_range = (3, 6)
+until_range = (4, 5)
 
 # Client parameters
 capacity_range_clients = (100, 1000)  # client capacity range in GB
 duration_range_clients = (30, 365)  # Contract duration range in days
 collateral_range_clients = (0.1, 5)  # Collateral range in CODX tokens
-price_threshold_clients = (
-    0.5,
-    3,
-)  # Minimum acceptable price for clients, in CODX tokens
+price_threshold_clients = (0.5, 3)  # Minimum acceptable price for clients, in CODX tokens
 
 # Client arrival parameters
 lambda_rate_client = 5  # Average number of clients arriving per day
 lambda_rate_provider = 1 / 3  # Average number of providers arriving per day
 total_time = 30  # Total simulation time in days
-delay_range = (1, 4)
+delay_range = (1, 3)
 
 # Generate initial set of providers
 providers = generate_providers(
@@ -291,12 +285,11 @@ bookkeeper = MarketplaceBookkeeper()
 unserviced_deals = 0
 deals_over_time = []
 collateral_over_time = []
-deals_per_provider = {
-    provider.provider_id: 0 for provider in providers
-}  # Deal count per provider
+deals_per_provider = {provider.provider_id: 0 for provider in providers}  # Deal count per provider
 
 available_space_over_time = []
 unserviced_deals_list = []
+valid_slots = []
 
 # Calculate initial total capacity
 total_capacity = sum(slot.capacity for provider in providers for slot in provider.slots)
@@ -327,44 +320,36 @@ while time < total_time:
         )[0]
 
         # Select slot with the highest collateral available
-        valid_slots = [
-            slot
-            for provider in providers
-            for slot in provider.slots
-            if slot.decide_on_contract(client)
-        ]
-
-        # Verify if the contract was succesful according to a probability
-        contract_success = get_contract_success()
+        valid_slots = [slot for provider in providers for slot in provider.slots if slot.decide_on_contract(client)]
 
         # Check if there are any valid slots before calling max()
         if valid_slots:
-            max_collateral_slot = max(
-                valid_slots, key=lambda slot: slot.collateral_available
-            )
-            # Find the provider that contains the max_collateral_slot
-            max_collateral_provider = next(
-                provider
-                for provider in providers
-                if max_collateral_slot in provider.slots
-            )
+            max_collateral_slot = max(valid_slots, key=lambda slot: slot.collateral_available)
 
-        # Attempt to create a deal between the client and selected provider
-        if max_collateral_slot and contract_success:
-            bookkeeper.add_deal(
-                client,
-                max_collateral_provider,
-                max_collateral_slot,
-                client.size,
-                client.price,
-                client.duration,
-                client.collateral,
-            )
+            # Generate probability of contract being failed
+            contract_success = get_contract_success()
+
+            # Attempt to create a deal between the client and selected provider
+            if max_collateral_slot and contract_success:
+
+                # Find the provider that contains the max_collateral_slot
+                max_collateral_provider = next(
+                    provider for provider in providers if max_collateral_slot in provider.slots
+                )
+
+                # Add deal to the book keeper
+                bookkeeper.add_deal(
+                    client,
+                    max_collateral_provider,
+                    max_collateral_slot,
+                    client.size,
+                    client.price,
+                    client.duration,
+                    client.collateral,
+                )
 
         else:
-            unserviced_deals += (
-                1  # Increment unserviced deals counter if no match is found
-            )
+            unserviced_deals += 1  # Increment unserviced deals counter if no match is found
             unserviced_deals_list.append(client)
 
         # Record the total number of deals and collateral at this point in time
@@ -389,34 +374,29 @@ while time < total_time:
         )[0]
         providers.append(new_provider)
 
-        total_capacity += sum(
-            slot.capacity for slot in new_provider.slots
-        )  # Increase total capacity
+        total_capacity += sum(slot.capacity for slot in new_provider.slots)  # Increase total capacity
 
         # Attempt to service previously unserviced deals
-        for unserviced_client in unserviced_deals_list[
-            :
-        ]:  # Iterate over a copy of the list
+        for unserviced_client in unserviced_deals_list[:]:  # Iterate over a copy of the list
             for slot in new_provider.slots:
                 if slot.decide_on_contract(unserviced_client):
                     bookkeeper.add_deal(
                         unserviced_client,
                         new_provider,
+                        slot,
                         unserviced_client.size,
                         unserviced_client.price,
                         unserviced_client.duration,
                         unserviced_client.collateral,
                     )
-                    unserviced_deals_list.remove(
-                        unserviced_client
-                    )  # Remove serviced client from the unserviced list
-                    deals_per_provider[
-                        new_provider.provider_id
-                    ] += 1  # Update deal count for the new provider
+                    unserviced_deals_list.remove(unserviced_client)  # Remove serviced client from the unserviced list
+                    deals_per_provider[new_provider.provider_id] += 1  # Update deal count for the new provider
+                    break  # Exit the inner loop as the client has been serviced
+            else:
+                continue  # If the inner loop wasn't broken, continue with the next client
+            break
 
-    current_collateral = sum(
-        deal.collateral for deal in bookkeeper.deals if deal.provider in providers
-    )
+    current_collateral = sum(deal.collateral for deal in bookkeeper.deals if deal.provider in providers)
     available_space_over_time.append(total_capacity - current_collateral)
 
 # Output the total number of deals serviced and unserviced deals
@@ -431,3 +411,22 @@ plt.xlabel("Day")
 plt.ylabel("Total Deals")
 plt.title("Total Deals Over Time")
 plt.legend()
+
+plt.subplot(1, 3, 2)
+
+plt.plot(collateral_over_time, label="Total Collateral", color="orange")
+plt.xlabel("Day")
+plt.ylabel("Total Collateral")
+plt.title("Total Collateral Over Time")
+plt.legend()
+
+plt.subplot(1, 3, 3)
+
+plt.plot(available_space_over_time, label="Available Space", color="green")
+plt.xlabel("Time")
+plt.ylabel("Available Space (GB)")
+plt.title("Historical Available Space Over Time")
+plt.legend()
+plt.tight_layout()
+
+plt.show()
